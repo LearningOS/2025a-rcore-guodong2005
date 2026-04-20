@@ -233,6 +233,38 @@ impl MemorySet {
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
         self.page_table.translate(vpn)
     }
+    /// Map a new framed user area if the target range is fully unmapped.
+    pub fn mmap(&mut self, start: VirtAddr, end: VirtAddr, permission: MapPermission) -> bool {
+        let stvpn = start.floor();
+        let edvpn = end.ceil();
+        for vpn in VPNRange::new(stvpn, edvpn) {
+            if self.translate(vpn).is_some() {
+                return false;
+            }
+        }
+        self.push(MapArea::new(start, end, MapType::Framed, permission), None);
+        true
+    }
+
+    /// Unmap an existing area when the target range is fully mapped.
+    pub fn munmap(&mut self, start: VirtAddr, end: VirtAddr) -> bool {
+        let stvpn = start.floor();
+        let edvpn = end.ceil();
+        for vpn in VPNRange::new(stvpn, edvpn) {
+            if !self.translate(vpn).is_some() {
+                return false;
+            }
+        }
+        if let Some(idx) = self.areas.iter().position(|area| {
+            area.vpn_range.get_start() == stvpn && area.vpn_range.get_end() == edvpn
+        }) {
+            let mut area = self.areas.remove(idx);
+            area.unmap(&mut self.page_table);
+            true
+        } else {
+            false
+        }
+    }
     /// shrink the area to new_end
     #[allow(unused)]
     pub fn shrink_to(&mut self, start: VirtAddr, new_end: VirtAddr) -> bool {
