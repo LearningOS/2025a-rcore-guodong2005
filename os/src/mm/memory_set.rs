@@ -238,8 +238,10 @@ impl MemorySet {
         let stvpn = start.floor();
         let edvpn = end.ceil();
         for vpn in VPNRange::new(stvpn, edvpn) {
-            if self.translate(vpn).is_some() {
-                return false;
+            if let Some(pte) = self.translate(vpn) {
+                if pte.is_valid() {
+                    return false;
+                }
             }
         }
         self.push(MapArea::new(start, end, MapType::Framed, permission), None);
@@ -251,8 +253,10 @@ impl MemorySet {
         let stvpn = start.floor();
         let edvpn = end.ceil();
         for vpn in VPNRange::new(stvpn, edvpn) {
-            if !self.translate(vpn).is_some() {
-                return false;
+            if let Some(pte) = self.translate(vpn) {
+                if !pte.is_valid() {
+                    return false;
+                }
             }
         }
         if let Some(idx) = self.areas.iter().position(|area| {
