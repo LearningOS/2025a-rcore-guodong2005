@@ -4,14 +4,21 @@ MODE := release
 KERNEL_ELF := target/$(TARGET)/$(MODE)/os
 KERNEL_BIN := $(KERNEL_ELF).bin
 DISASM_TMP := target/$(TARGET)/$(MODE)/asm
-FS_IMG := ../user/target/$(TARGET)/$(MODE)/fs.img
+FS_IMG := ../user/.host-build/cargo-target/$(TARGET)/$(MODE)/fs.img
 APPS := ../user/src/bin/*
 OFFLINE :=
 
 # BOARD
 BOARD := qemu
-SBI ?= rustsbi
-BOOTLOADER := ../bootloader/$(SBI)-$(BOARD).bin
+SBI ?= default
+ifeq ($(SBI), default)
+	QEMU_BOOT_ARGS := -bios default -kernel $(KERNEL_ELF)
+else
+	BOOTLOADER := ../bootloader/$(SBI)-$(BOARD).bin
+	QEMU_BOOT_ARGS := -bios $(BOOTLOADER) -device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA)
+endif
+QEMU_FS_ARGS := -drive file=$(FS_IMG),if=none,format=raw,id=x0 \
+	-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 
 # Building mode argument
 ifeq ($(MODE), release)
@@ -35,7 +42,7 @@ DISASM ?= -x
 # Run usertests or usershell
 TEST ?=
 
-build: env $(KERNEL_BIN) fs-img 
+build: env fs-img $(KERNEL_BIN)
 
 env:
 ifeq ($(OFFLINE),)
@@ -51,10 +58,9 @@ $(KERNEL_BIN): kernel
 fs-img: $(APPS)
 	@make -C ../user build TEST=$(TEST) CHAPTER=$(CHAPTER) BASE=$(BASE)
 	@rm -f $(FS_IMG)
-	@cd ../easy-fs-fuse && cargo run --release -- -s ../user/build/app/ -t ../user/target/riscv64gc-unknown-none-elf/release/
+	@cd ../easy-fs-fuse && cargo run --release -- -s ../user/.host-build/app/ -t ../user/.host-build/cargo-target/$(TARGET)/$(MODE)/
 
 kernel:
-	@make -C ../user build TEST=$(TEST) CHAPTER=$(CHAPTER) BASE=$(BASE)
 	@echo Platform: $(BOARD)
 	@cargo build $(MODE_ARG)
 
@@ -75,20 +81,18 @@ run-inner:
 	@qemu-system-riscv64 \
 		-machine virt \
 		-nographic \
-		-bios $(BOOTLOADER) \
-		-device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA) \
-		-drive file=$(FS_IMG),if=none,format=raw,id=x0 \
-        -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
+		$(QEMU_BOOT_ARGS) \
+		$(QEMU_FS_ARGS)
 
 debug: build
 	@tmux new-session -d \
-		"qemu-system-riscv64 -machine virt -nographic -bios $(BOOTLOADER) -device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA) -s -S" && \
+		"qemu-system-riscv64 -machine virt -nographic $(QEMU_BOOT_ARGS) $(QEMU_FS_ARGS) -s -S" && \
 		tmux split-window -h "riscv64-unknown-elf-gdb -ex 'file $(KERNEL_ELF)' -ex 'set arch riscv:rv64' -ex 'target remote localhost:1234'" && \
 		tmux -2 attach-session -d
 
 
 gdbserver: build
-	@qemu-system-riscv64 -machine virt -nographic -bios $(BOOTLOADER) -device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA) -s -S
+	@qemu-system-riscv64 -machine virt -nographic $(QEMU_BOOT_ARGS) $(QEMU_FS_ARGS) -s -S
 
 gdbclient:
 	@riscv64-unknown-elf-gdb -ex 'file $(KERNEL_ELF)' -ex 'set arch riscv:rv64' -ex 'target remote localhost:1234'

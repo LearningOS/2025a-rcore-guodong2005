@@ -23,7 +23,7 @@ impl File for Stdin {
         let mut c: usize;
         loop {
             c = console_getchar();
-            if c == 0 {
+            if c == 0 || c == usize::MAX {
                 suspend_current_and_run_next();
                 continue;
             } else {
