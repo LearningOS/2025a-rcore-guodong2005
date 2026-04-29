@@ -52,4 +52,9 @@ impl Semaphore {
             block_current_and_run_next();
         }
     }
+
+    /// Get the current available count of the semaphore
+    pub fn available_count(&self) -> isize {
+        self.inner.exclusive_access().count
+    }
 }

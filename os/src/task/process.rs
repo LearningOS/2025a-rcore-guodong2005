@@ -49,6 +49,18 @@ pub struct ProcessControlBlockInner {
     pub semaphore_list: Vec<Option<Arc<Semaphore>>>,
     /// condvar list
     pub condvar_list: Vec<Option<Arc<Condvar>>>,
+    /// whether deadlock detection is enabled for this process
+    pub deadlock_detect: bool,
+    /// mutex resources held by each thread
+    pub mutex_allocation: Vec<Vec<usize>>,
+    /// mutex resources currently requested by each thread
+    pub mutex_need: Vec<Vec<usize>>,
+    /// semaphore resources held by each thread
+    pub semaphore_allocation: Vec<Vec<usize>>,
+    /// semaphore resources currently requested by each thread
+    pub semaphore_need: Vec<Vec<usize>>,
+    /// total count for each semaphore resource
+    pub semaphore_total: Vec<usize>,
 }
 
 impl ProcessControlBlockInner {
@@ -81,6 +93,100 @@ impl ProcessControlBlockInner {
     /// get a task with tid in this process
     pub fn get_task(&self, tid: usize) -> Arc<TaskControlBlock> {
         self.tasks[tid].as_ref().unwrap().clone()
+    }
+    /// ensure deadlock-detection matrices have a row for tid
+    pub fn ensure_deadlock_thread(&mut self, tid: usize) {
+        while self.mutex_allocation.len() <= tid {
+            self.mutex_allocation.push(vec![0; self.mutex_list.len()]);
+            self.mutex_need.push(vec![0; self.mutex_list.len()]);
+        }
+        while self.semaphore_allocation.len() <= tid {
+            self.semaphore_allocation
+                .push(vec![0; self.semaphore_list.len()]);
+            self.semaphore_need.push(vec![0; self.semaphore_list.len()]);
+        }
+    }
+    /// ensure deadlock-detection matrices have a column for mutex_id
+    pub fn ensure_deadlock_mutex(&mut self, mutex_id: usize) {
+        for row in self.mutex_allocation.iter_mut() {
+            while row.len() <= mutex_id {
+                row.push(0);
+            }
+        }
+        for row in self.mutex_need.iter_mut() {
+            while row.len() <= mutex_id {
+                row.push(0);
+            }
+        }
+    }
+    /// ensure deadlock-detection matrices have a column for sem_id
+    pub fn ensure_deadlock_semaphore(&mut self, sem_id: usize, total: usize) {
+        while self.semaphore_total.len() <= sem_id {
+            self.semaphore_total.push(0);
+        }
+        self.semaphore_total[sem_id] = total;
+        for row in self.semaphore_allocation.iter_mut() {
+            while row.len() <= sem_id {
+                row.push(0);
+            }
+        }
+        for row in self.semaphore_need.iter_mut() {
+            while row.len() <= sem_id {
+                row.push(0);
+            }
+        }
+    }
+    /// run the deadlock safety check over current dependency matrices
+    pub fn deadlock_safe(
+        total: &[usize],
+        allocation: &[Vec<usize>],
+        need: &[Vec<usize>],
+    ) -> bool {
+        let thread_count = allocation.len();
+        let resource_count = total.len();
+        let mut work = total.to_vec();
+        for thread_id in 0..thread_count {
+            for resource_id in 0..resource_count {
+                work[resource_id] =
+                    work[resource_id].saturating_sub(allocation[thread_id][resource_id]);
+            }
+        }
+        let mut finish = vec![false; thread_count];
+        loop {
+            let mut found = false;
+            for thread_id in 0..thread_count {
+                if !finish[thread_id]
+                    && (0..resource_count)
+                        .all(|resource_id| need[thread_id][resource_id] <= work[resource_id])
+                {
+                    for resource_id in 0..resource_count {
+                        work[resource_id] += allocation[thread_id][resource_id];
+                    }
+                    finish[thread_id] = true;
+                    found = true;
+                }
+            }
+            if !found {
+                break;
+            }
+        }
+        finish.iter().all(|done| *done)
+    }
+    /// check whether current mutex dependency state is safe
+    pub fn mutex_deadlock_safe(&self) -> bool {
+        Self::deadlock_safe(
+            &vec![1; self.mutex_list.len()],
+            &self.mutex_allocation,
+            &self.mutex_need,
+        )
+    }
+    /// check whether current semaphore dependency state is safe
+    pub fn semaphore_deadlock_safe(&self) -> bool {
+        Self::deadlock_safe(
+            &self.semaphore_total,
+            &self.semaphore_allocation,
+            &self.semaphore_need,
+        )
     }
 }
 
@@ -119,6 +225,12 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    deadlock_detect: false,
+                    mutex_allocation: Vec::new(),
+                    mutex_need: Vec::new(),
+                    semaphore_allocation: Vec::new(),
+                    semaphore_need: Vec::new(),
+                    semaphore_total: Vec::new(),
                 })
             },
         });
@@ -245,6 +357,12 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    deadlock_detect: false,
+                    mutex_allocation: Vec::new(),
+                    mutex_need: Vec::new(),
+                    semaphore_allocation: Vec::new(),
+                    semaphore_need: Vec::new(),
+                    semaphore_total: Vec::new(),
                 })
             },
         });

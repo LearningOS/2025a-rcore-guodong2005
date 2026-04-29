@@ -41,6 +41,7 @@ pub fn sys_thread_create(entry: usize, arg: usize) -> isize {
         tasks.push(None);
     }
     tasks[new_task_tid] = Some(Arc::clone(&new_task));
+    process_inner.ensure_deadlock_thread(new_task_tid);
     let new_task_trap_cx = new_task_inner.get_trap_cx();
     *new_task_trap_cx = TrapContext::app_init_context(
         entry,
@@ -112,6 +113,23 @@ pub fn sys_waittid(tid: usize) -> i32 {
     if let Some(exit_code) = exit_code {
         // dealloc the exited thread
         process_inner.tasks[tid] = None;
+        // clear deadlock tracking data for this tid
+        if tid < process_inner.mutex_allocation.len() {
+            for v in process_inner.mutex_allocation[tid].iter_mut() {
+                *v = 0;
+            }
+            for v in process_inner.mutex_need[tid].iter_mut() {
+                *v = 0;
+            }
+        }
+        if tid < process_inner.semaphore_allocation.len() {
+            for v in process_inner.semaphore_allocation[tid].iter_mut() {
+                *v = 0;
+            }
+            for v in process_inner.semaphore_need[tid].iter_mut() {
+                *v = 0;
+            }
+        }
         exit_code
     } else {
         // waited thread has not exited
